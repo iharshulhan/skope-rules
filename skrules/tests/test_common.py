@@ -4,8 +4,8 @@ from skrules.datasets import load_credit_data
 
 
 def test_classifier():
-    check_estimator(SkopeRules)
+    return check_estimator(SkopeRules)
 
 
 def test_load_credit_data():
-    assert load_credit_data().data.shape[0] == 30000
+    return load_credit_data().data.shape[0] == 30000

@@ -7,9 +7,9 @@ from warnings import warn
 from sklearn.base import BaseEstimator
 from sklearn.utils.validation import check_X_y, check_array, check_is_fitted
 from sklearn.utils.multiclass import check_classification_targets
-from sklearn.utils import indices_to_mask
 from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.ensemble import BaggingClassifier, BaggingRegressor
+from sklearn.externals import six
 from sklearn.tree import _tree
 
 from .rule import Rule, replace_feature_name
@@ -193,8 +193,14 @@ class SkopeRules(BaseEstimator):
         self : object
             Returns self.
         """
-
+        X_ = X
+        y_ = y
+        self.zeros, self.ones = {}, {}
+        for col in X.columns:
+            self.ones[col] = set(X.index[X[col] == 1])
+            self.zeros[col] = set(X.index[X[col] == 0])
         X, y = check_X_y(X, y)
+
         check_classification_targets(y)
         self.n_features_ = X.shape[1]
 
@@ -221,7 +227,7 @@ class SkopeRules(BaseEstimator):
         # ensure that max_samples is in [1, n_samples]:
         n_samples = X.shape[0]
 
-        if isinstance(self.max_samples, str):
+        if isinstance(self.max_samples, six.string_types):
             raise ValueError('max_samples (%s) is not supported.'
                              'Valid choices are: "auto", int or'
                              'float' % self.max_samples)
@@ -334,8 +340,7 @@ class SkopeRules(BaseEstimator):
                                                 self.estimators_features_):
 
             # Create mask for OOB samples
-            mask = ~indices_to_mask(samples, n_samples)            
-                        
+            mask = ~samples
             if sum(mask) == 0:
                 warn("OOB evaluation not possible: doing it in-bag."
                      " Performance evaluation is likely to be wrong"
@@ -346,13 +351,19 @@ class SkopeRules(BaseEstimator):
                 estimator, np.array(self.feature_names_)[features])
 
             # XXX todo: idem without dataframe
-            X_oob = pandas.DataFrame((X[mask, :])[:, features],
-                                     columns=np.array(
-                                         self.feature_names_)[features])
+            if len(mask) == len(X_):
+                X_oob = X_#.iloc[mask]
+            else:
+                X_oob = X_.iloc[mask]
+            # X_oob = pandas.DataFrame((X[mask, :])[:, features],
+            #                          columns=np.array(
+            #                              self.feature_names_)[features])
 
             if X_oob.shape[1] > 1:  # otherwise pandas bug (cf. issue #16363)
-                y_oob = y[mask]
-                y_oob = np.array((y_oob != 0))
+                if len(mask) == len(X_):
+                    y_oob = y_#.iloc[mask]
+                else:
+                    y_oob = y_.iloc[mask]
 
                 # Add OOB performances to rules:
                 rules_from_tree = [(r, self._eval_rule_perf(r, X_oob, y_oob))
@@ -613,10 +624,20 @@ class SkopeRules(BaseEstimator):
         return rules if len(rules) > 0 else 'True'
 
     def _eval_rule_perf(self, rule, X, y):
-        detected_index = list(X.query(rule).index)
+        tmp = X
+        detected_index = set(tmp.index)
+        for part_rule in rule.split(' and '):
+            part_rule = part_rule.strip()
+            sign = '==' if '>' in part_rule else '!='
+            if sign == '==':
+                detected_index = detected_index.intersection(self.ones[self.feature_dict_[part_rule.split()[0]]])
+            else:
+                detected_index = detected_index.intersection(self.zeros[self.feature_dict_[part_rule.split()[0]]])
+
+        detected_index = list(detected_index)
         if len(detected_index) <= 1:
             return (0, 0)
-        y_detected = y[detected_index]
+        y_detected = y.loc[detected_index]
         true_pos = y_detected[y_detected > 0].sum()
         if true_pos == 0:
             return (0, 0)
